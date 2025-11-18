@@ -1,15 +1,15 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import pickle
 
-# --- CONFIG ------------------------------------------------------------------
+# CONFIGURATIONS FOR MAPPING
 
 st.set_page_config(
     page_title="US YPLL Explorer",
     layout="wide",
 )
 
-# Map UCD labels in the dataframe to short names we'll use in the UI
 UCD_MAP = {
     '#Malignant neoplasms (C00-C97)': 'cancer',
     '#Diseases of heart (I00-I09,I11,I13,I20-I51)': 'heart_disease',
@@ -18,7 +18,6 @@ UCD_MAP = {
     '#Accidents (unintentional injuries) (V01-X59,Y85-Y86)': 'accidents',
 }
 
-# Full state name -> USPS abbreviation for Plotly
 STATE_ABBREV = {
     "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
     "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
@@ -35,95 +34,99 @@ STATE_ABBREV = {
     "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY",
 }
 
+FEATURE_COLS = [
+    "year", "state", "sex", "UCD", "years_from_start",
+    "obesity_pct", "uninsured_pct", "income_mean", "employed_pct",
+    "diabetes_pct", "educa_z", "smoking_pct_z", "binge_drink_pct_z",
+    "seatbelt_always_pct_z", "rural_pct",
+]
 
-# --- DATA LOADING & PREP -----------------------------------------------------
+# LOADING THE MODEL
+
+with open('model/model.pkl', "rb") as f:
+    model = pickle.load(f)
+
+# LOADING IN THE DATA
 
 @st.cache_data
 def load_data():
     df = pd.read_csv("df_states.csv")
 
-    # Clean deaths: convert "Suppressed" -> NaN -> 0, keep numeric for aggregation
-    df["deaths_num"] = pd.to_numeric(df["deaths"], errors="coerce").fillna(0)
+    start_year = df["year"].min()
+    df["years_from_start"] = df["year"] - start_year
 
-    # Keep only the causes we care about for this app
-    df = df[df["UCD"].isin(UCD_MAP.keys())].copy()
-    df["cause"] = df["UCD"].map(UCD_MAP)
+    for col in ["state", "sex", "UCD"]:
+        df[col] = df[col].astype("category")
+
+    df["cause_short"] = df["UCD"].map(UCD_MAP)
 
     return df
 
 
-def aggregate_by_state(df, year, improvements):
-    """
-    df: full df_states with 'deaths_num' and 'cause' columns
-    year: selected year (int)
-    improvements: dict like {"cancer": 5, "heart_disease": 10, ...} (percent reductions)
-    """
+def aggregate_by_state(df, base_year, improvements, model, target_year=2030):
 
-    d = df[df["year"] == year].copy()
+    d = df[df["year"] == base_year].copy()
 
-    grouped = (
-        d.groupby(["state", "cause"], as_index=False)["deaths_num"]
-        .sum()
+    start_year = df["year"].min()
+    d["year"] = target_year
+    d["years_from_start"] = target_year - start_year
+
+    X = d[FEATURE_COLS]
+    d["ypll_pred"] = model.predict(X)
+
+    d["cause_short"] = d["UCD"].map(UCD_MAP)
+    factors_by_cause = {k: 1 - v / 100.0 for k, v in improvements.items()}
+    d["factor"] = d["cause_short"].map(factors_by_cause).fillna(1.0)
+    d["ypll_adj"] = d["ypll_pred"] * d["factor"]
+
+    summary = (
+        d.groupby("state", as_index=False)
+         .agg(
+             baseline_total=("ypll_pred", "sum"),
+             adjusted_total=("ypll_adj", "sum"),
+         )
     )
-
-    pivot = grouped.pivot(index="state", columns="cause", values="deaths_num").fillna(0)
-
-    for cause in improvements.keys():
-        if cause not in pivot.columns:
-            pivot[cause] = 0.0
-
-    pivot["baseline_total"] = pivot[list(improvements.keys())].sum(axis=1)
-
-    for cause, pct in improvements.items():
-        reduction_factor = 1 - (pct / 100.0)
-        pivot[f"{cause}_adj"] = pivot[cause] * reduction_factor
-
-    adj_cols = [f"{cause}_adj" for cause in improvements.keys()]
-    pivot["adjusted_total"] = pivot[adj_cols].sum(axis=1)
-
-    summary = pivot.reset_index()
+    summary["savings"] = summary["baseline_total"] - summary["adjusted_total"]
     summary["state_abbrev"] = summary["state"].map(STATE_ABBREV)
 
     return summary
 
 
 # --- SIDEBAR CONTROLS --------------------------------------------------------
-
 df = load_data()
-
 st.sidebar.title("Controls")
 
-year = st.sidebar.selectbox(
-    "Year",
+base_year = st.sidebar.selectbox(
+    "Base year (covariates)",
     options=sorted(df["year"].unique()),
-    index=0
+    index=len(sorted(df["year"].unique())) - 1,  # default to latest
 )
 
 st.sidebar.markdown("### 10-year improvement assumptions")
 
-# Pick 4 sliders for now (you can add the 5th easily if you want)
-cancer_improve = st.sidebar.slider("Cancer deaths reduction (%)", 0, 50, 0, step=1)
-heart_improve = st.sidebar.slider("Heart disease deaths reduction (%)", 0, 50, 0, step=1)
-stroke_improve = st.sidebar.slider("Stroke deaths reduction (%)", 0, 50, 0, step=1)
-accidents_improve = st.sidebar.slider("Accident deaths reduction (%)", 0, 50, 0, step=1)
+cancer_improve = st.sidebar.slider("Cancer deaths reduction (%)", 0, 50, 0)
+heart_improve = st.sidebar.slider("Heart disease deaths reduction (%)", 0, 50, 0)
+stroke_improve  = st.sidebar.slider("Stroke deaths reduction (%)", 0, 50, 0)
+lower_resp_improve  = st.sidebar.slider("Lower respiratory deaths reduction (%)", 0, 50, 0)
+accidents_improve = st.sidebar.slider("Accident deaths reduction (%)", 0, 50, 0)
 
 improvements = {
-    "cancer": cancer_improve,
+    "cancer":        cancer_improve,
     "heart_disease": heart_improve,
-    "stroke": stroke_improve,
-    "accidents": accidents_improve,
-    # You can add "lower_resp": slider_value here if you want the 5th slider
+    "stroke":        stroke_improve,
+    "lower_resp":    lower_resp_improve,
+    "accidents":     accidents_improve,
 }
+
+summary = aggregate_by_state(df, base_year, improvements, model, target_year=2030)
 
 # --- MAIN LAYOUT -------------------------------------------------------------
 
 st.title("A Longer Tomorrow: Modelling Years of Potential Life Lost")
 st.caption(
-    "Choropleth map of a YPLL-like metric by state, updated when you adjust "
+    "Model-based projection of YPLL by state in 2030, updated when you adjust "
     "cause-of-death improvements."
 )
-
-summary = aggregate_by_state(df, year, improvements)
 
 baseline_min = summary["baseline_total"].min()
 baseline_max = summary["baseline_total"].max()
@@ -131,9 +134,8 @@ baseline_max = summary["baseline_total"].max()
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.subheader(f"Adjusted YPLL proxy by state • {year}")
+    st.subheader(f"Adjusted YPLL by state • 2030 (base year {base_year})")
 
-    # Plotly choropleth
     fig = px.choropleth(
         summary.dropna(subset=["state_abbrev"]),
         locations="state_abbrev",
@@ -144,16 +146,17 @@ with col1:
         hover_data={
             "baseline_total": ":,.0f",
             "adjusted_total": ":,.0f",
+            "savings": ":,.0f",
             "state_abbrev": False,
         },
-        labels={"adjusted_total": "Adj. YPLL proxy"},
+        labels={"adjusted_total": "Adj. YPLL (2030)"},
         color_continuous_scale="Viridis",
-        range_color=(baseline_min, baseline_max),  # <- key line
+        range_color=(baseline_min, baseline_max),
     )
 
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0),
-        coloraxis_colorbar=dict(title="Adj. YPLL\n(proxy)"),
+        coloraxis_colorbar=dict(title="Adj. YPLL (2030)"),
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -163,17 +166,18 @@ with col2:
 
     total_baseline = summary["baseline_total"].sum()
     total_adjusted = summary["adjusted_total"].sum()
-    delta = total_baseline - total_adjusted
-    pct_delta = (delta / total_baseline * 100) if total_baseline > 0 else 0
+    total_savings  = summary["savings"].sum()
+    delta_value = total_adjusted - total_baseline
+    pct_delta      = total_savings / total_baseline * 100
 
     st.metric(
-        "Total baseline deaths (proxy)",
+        "Total baseline YPLL (2030)",
         f"{total_baseline:,.0f}",
     )
     st.metric(
-        "Total adjusted deaths (proxy)",
+        "Total adjusted YPLL (2030)",
         f"{total_adjusted:,.0f}",
-        delta=f"-{delta:,.0f}",
+        delta=f"{delta_value:,.0f}",
     )
     st.metric(
         "Relative reduction",
