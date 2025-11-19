@@ -3,11 +3,21 @@ import pandas as pd
 import plotly.express as px
 import pickle
 
-# CONFIGURATIONS FOR MAPPING
-
 st.set_page_config(
     page_title="US YPLL Explorer",
     layout="wide",
+)
+
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebar"] {
+            min-width: 320px;
+            max-width: 320px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 UCD_MAP = {
@@ -34,6 +44,15 @@ STATE_ABBREV = {
     "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY",
 }
 
+# Trend-based default changes in deaths by cause over 10 years
+starting_trend = {
+    "cancer":        -15,   # ≈1.6–1.7%/yr decline
+    "heart_disease": -10,   # ≈1.0%/yr decline
+    "stroke":        -12,   # ≈1.2%/yr decline
+    "lower_resp":    -14,   # ≈1.5%/yr decline
+    "accidents":      -5,   # small improvement, very uncertain
+}
+
 FEATURE_COLS = [
     "year", "state", "sex", "UCD", "years_from_start",
     "obesity_pct", "uninsured_pct", "income_mean", "employed_pct",
@@ -41,145 +60,367 @@ FEATURE_COLS = [
     "seatbelt_always_pct_z", "rural_pct",
 ]
 
-# LOADING THE MODEL
+# Kept for future use (Actions mode), but not used in the UI right now
+ACTION_FEATURES = [
+    "obesity_pct",
+    "uninsured_pct",
+    "diabetes_pct",
+    "smoking_pct_z",
+    "binge_drink_pct_z",
+]
 
-with open('model/model.pkl', "rb") as f:
+with open("model/model.pkl", "rb") as f:
     model = pickle.load(f)
 
-# LOADING IN THE DATA
 
 @st.cache_data
 def load_data():
     df = pd.read_csv("df_states.csv")
-
     start_year = df["year"].min()
     df["years_from_start"] = df["year"] - start_year
-
     for col in ["state", "sex", "UCD"]:
         df[col] = df[col].astype("category")
-
     df["cause_short"] = df["UCD"].map(UCD_MAP)
-
+    df["deaths_num"] = pd.to_numeric(df["deaths"], errors="coerce").fillna(0.0)
     return df
 
 
 def aggregate_by_state(df, base_year, improvements, model, target_year=2030):
-
-    d = df[df["year"] == base_year].copy()
-
+    d_base = df[df["year"] == base_year].copy()
     start_year = df["year"].min()
+
+    cause_totals = (
+        d_base.dropna(subset=["cause_short"])
+              .groupby(["state", "cause_short"], as_index=False)["deaths_num"]
+              .sum()
+              .rename(columns={"deaths_num": "cause_deaths_obs"})
+    )
+
+    state_totals_obs = (
+        cause_totals.groupby("state", as_index=False)["cause_deaths_obs"]
+                    .sum()
+                    .rename(columns={"cause_deaths_obs": "state_deaths_obs"})
+    )
+
+    cause_shares = cause_totals.merge(state_totals_obs, on="state", how="left")
+    cause_shares["cause_share"] = 0.0
+    mask = cause_shares["state_deaths_obs"] > 0
+    cause_shares.loc[mask, "cause_share"] = (
+        cause_shares.loc[mask, "cause_deaths_obs"] / cause_shares.loc[mask, "state_deaths_obs"]
+    )
+
+    d = d_base.copy()
     d["year"] = target_year
     d["years_from_start"] = target_year - start_year
 
     X = d[FEATURE_COLS]
     d["ypll_pred"] = model.predict(X)
 
-    d["cause_short"] = d["UCD"].map(UCD_MAP)
-    factors_by_cause = {k: 1 - v / 100.0 for k, v in improvements.items()}
-    d["factor"] = d["cause_short"].map(factors_by_cause).fillna(1.0)
-    d["ypll_adj"] = d["ypll_pred"] * d["factor"]
+    baseline_state = (
+        d.groupby("state", as_index=False)["ypll_pred"]
+         .sum()
+         .rename(columns={"ypll_pred": "baseline_total"})
+    )
+
+    merged = cause_shares.merge(baseline_state, on="state", how="left")
+    merged["baseline_model_cause"] = merged["baseline_total"] * merged["cause_share"]
+
+    # For death-rate mode: negative = fewer deaths, positive = more deaths
+    factors_by_cause = {k: 1 + (v / 100.0) for k, v in improvements.items()}
+
+    factor_series = (
+        merged["cause_short"]
+        .astype(str)
+        .map(factors_by_cause)
+        .astype("float64")
+        .fillna(1.0)
+    )
+    merged["factor"] = factor_series
+
+    merged["adjusted_model_cause"] = merged["baseline_model_cause"] * merged["factor"]
 
     summary = (
-        d.groupby("state", as_index=False)
-         .agg(
-             baseline_total=("ypll_pred", "sum"),
-             adjusted_total=("ypll_adj", "sum"),
-         )
+        merged.groupby("state", as_index=False)
+              .agg(
+                  baseline_total=("baseline_model_cause", "sum"),
+                  adjusted_total=("adjusted_model_cause", "sum"),
+              )
     )
-    summary["savings"] = summary["baseline_total"] - summary["adjusted_total"]
+
+    # Positive = fewer YPLL (good), negative = more YPLL (bad)
+    summary["years_gained"] = summary["baseline_total"] - summary["adjusted_total"]
     summary["state_abbrev"] = summary["state"].map(STATE_ABBREV)
 
     return summary
 
 
-# --- SIDEBAR CONTROLS --------------------------------------------------------
+# Kept for later — not used in the current UI
+def aggregate_by_state_actions(df, base_year, feature_changes, model, target_year=2030):
+    d_base = df[df["year"] == base_year].copy()
+    start_year = df["year"].min()
+
+    d_base["year"] = target_year
+    d_base["years_from_start"] = target_year - start_year
+    X_base = d_base[FEATURE_COLS]
+    d_base["ypll_base"] = model.predict(X_base)
+
+    d_actions = d_base.copy()
+    for feat, pct in feature_changes.items():
+        if feat in d_actions.columns:
+            factor = 1 + pct / 100.0
+            d_actions[feat] = d_actions[feat] * factor
+
+    # Clip to 5th–95th percentile for stability
+    clip_q = (
+        df[df["year"] == base_year][ACTION_FEATURES]
+        .quantile([0.05, 0.95])
+    )
+
+    for feat in ACTION_FEATURES:
+        if feat in d_actions.columns:
+            lo = clip_q.loc[0.05, feat]
+            hi = clip_q.loc[0.95, feat]
+            d_actions[feat] = d_actions[feat].clip(lower=lo, upper=hi)
+
+    X_actions = d_actions[FEATURE_COLS]
+    d_actions["ypll_actions"] = model.predict(X_actions)
+
+    baseline_state = (
+        d_base.groupby("state", as_index=False)["ypll_base"]
+        .sum()
+        .rename(columns={"ypll_base": "baseline_total"})
+    )
+    adjusted_state = (
+        d_actions.groupby("state", as_index=False)["ypll_actions"]
+        .sum()
+        .rename(columns={"ypll_actions": "adjusted_total"})
+    )
+
+    summary = baseline_state.merge(adjusted_state, on="state", how="left")
+    summary["years_gained"] = summary["baseline_total"] - summary["adjusted_total"]
+    summary["state_abbrev"] = summary["state"].map(STATE_ABBREV)
+
+    return summary
+
+
 df = load_data()
-st.sidebar.title("Controls")
+min_year = int(df["year"].min())
+max_year = int(df["year"].max())
+base_year = max_year  # stick with 2020 as baseline
 
-base_year = st.sidebar.selectbox(
-    "Base year (covariates)",
-    options=sorted(df["year"].unique()),
-    index=len(sorted(df["year"].unique())) - 1,  # default to latest
+st.sidebar.title("Story navigation")
+mode = st.sidebar.radio(
+    "Section",
+    (
+        "Introduction",
+        "Modeling Years of Life Gained Using Death Rate",
+        "Conclusion",
+    ),
 )
 
-st.sidebar.markdown("### 10-year improvement assumptions")
+st.sidebar.markdown("---")
 
-cancer_improve = st.sidebar.slider("Cancer deaths reduction (%)", 0, 50, 0)
-heart_improve = st.sidebar.slider("Heart disease deaths reduction (%)", 0, 50, 0)
-stroke_improve  = st.sidebar.slider("Stroke deaths reduction (%)", 0, 50, 0)
-lower_resp_improve  = st.sidebar.slider("Lower respiratory deaths reduction (%)", 0, 50, 0)
-accidents_improve = st.sidebar.slider("Accident deaths reduction (%)", 0, 50, 0)
+if mode == "Modeling Years of Life Gained Using Death Rate":
+    st.sidebar.markdown("### 10-year change in deaths by cause")
+    st.sidebar.caption("Negative = fewer deaths (good), positive = more deaths (bad).")
 
-improvements = {
-    "cancer":        cancer_improve,
-    "heart_disease": heart_improve,
-    "stroke":        stroke_improve,
-    "lower_resp":    lower_resp_improve,
-    "accidents":     accidents_improve,
-}
+    cancer_change = st.sidebar.slider(
+        "Cancer deaths change (%)",
+        -20,
+        20,
+        starting_trend["cancer"],
+    )
+    heart_change = st.sidebar.slider(
+        "Heart disease deaths change (%)",
+        -20,
+        20,
+        starting_trend["heart_disease"],
+    )
+    stroke_change = st.sidebar.slider(
+        "Stroke deaths change (%)",
+        -20,
+        20,
+        starting_trend["stroke"],
+    )
+    lower_resp_change = st.sidebar.slider(
+        "Lower respiratory deaths change (%)",
+        -20,
+        20,
+        starting_trend["lower_resp"],
+    )
+    accidents_change = st.sidebar.slider(
+        "Accident deaths change (%)",
+        -20,
+        20,
+        starting_trend["accidents"],
+    )
 
-summary = aggregate_by_state(df, base_year, improvements, model, target_year=2030)
+    improvements = {
+        "cancer":        cancer_change,
+        "heart_disease": heart_change,
+        "stroke":        stroke_change,
+        "lower_resp":    lower_resp_change,
+        "accidents":     accidents_change,
+    }
 
-# --- MAIN LAYOUT -------------------------------------------------------------
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(
+        f"""
+        **How this map works**
 
-st.title("A Longer Tomorrow: Modelling Years of Potential Life Lost")
+        In this project, we estimate how changes in major causes of death translate into
+        **years of potential life gained by 2030**, using **{base_year}** as a baseline year
+        for each state's risk factors.
+
+        In this section, you directly adjust **cause-specific death rates**. Negative slider
+        values represent **fewer deaths** (improvement), and positive values represent
+        **more deaths** (worsening). The model projects how these changes would alter
+        years of potential life lost, and the map shows the **net years gained**.
+        """
+    )
+
+    summary = aggregate_by_state(
+        df,
+        base_year=base_year,
+        improvements=improvements,
+        model=model,
+        target_year=2030,
+    )
+
+elif mode == "Introduction":
+    improvements = starting_trend.copy()
+
+    st.sidebar.markdown("### Overview")
+    st.sidebar.markdown(
+        f"""
+        In this project, we use the CDC WONDER Underlying Cause of Death (UCD) dataset for 1999–2020
+        to estimate Years of Potential Life Lost (YPLL), aggregated at the U.S. state level.
+        The UCD data provide yearly state-level counts and rates of deaths for U.S. residents, 
+        broken down by underlying cause of death (ICD codes) and demographics such as age, sex, and race.
+
+        We use these data to estimate how changes in major causes of death translate into 
+        years of potential life gained by 2030, using {base_year} as a baseline year for each state's
+        risk factors. A LightGBM model trained on the historical data generates the projections 
+        that drive the map on this page.
+
+        The map shows a trend-based scenario: modest 10-year reductions in deaths 
+        from cancer, heart disease, stroke, lower respiratory disease, and accidents, 
+        consistent with recent national mortality trends.
+
+        States shaded in green are projected to gain more years of life, 
+        while red indicates net losses relative to the baseline.
+        """
+    )
+
+    summary = aggregate_by_state(
+        df,
+        base_year=base_year,
+        improvements=improvements,
+        model=model,
+        target_year=2030,
+    )
+
+elif mode == "Conclusion":
+    improvements = starting_trend.copy()
+
+    st.sidebar.markdown("### Conclusion")
+    st.sidebar.markdown(
+        f"""
+        This view summarizes what the model implies about **potential life gained** under
+        a modest improvement scenario.
+
+        These numbers are **model-based estimates**, not forecasts. They depend on how
+        well the model captures the relationship between state-level risk factors and
+        years of potential life lost, and on the assumptions you choose for changes
+        in deaths by cause.
+
+        Use this as a tool to compare **relative impact across states** and to
+        explore how improvements in different causes of death might translate into
+        more years of life for communities.
+        """
+    )
+
+    summary = aggregate_by_state(
+        df,
+        base_year=base_year,
+        improvements=improvements,
+        model=model,
+        target_year=2030,
+    )
+
+max_slider_pct = 20
+max_possible_change = float(summary["baseline_total"].max() * (max_slider_pct / 100.0))
+
+st.title("A Longer Tomorrow: Years of Potential Life Gained")
 st.caption(
-    "Model-based projection of YPLL by state in 2030, updated when you adjust "
-    "cause-of-death improvements."
+    f"Projected years of potential life gained (or lost) by state in 2030, using {base_year} "
+    "as the baseline risk factor year. Green indicates more years gained; red indicates losses."
 )
 
-baseline_min = summary["baseline_total"].min()
-baseline_max = summary["baseline_total"].max()
+st.subheader(f"Years of potential life gained • 2030 (baseline risk factors: {base_year})")
 
-col1, col2 = st.columns([2, 1])
+fig = px.choropleth(
+    summary.dropna(subset=["state_abbrev"]),
+    locations="state_abbrev",
+    locationmode="USA-states",
+    color="years_gained",
+    scope="usa",
+    hover_name="state",
+    hover_data={
+        "baseline_total": ":,.0f",
+        "adjusted_total": ":,.0f",
+        "years_gained": ":,.0f",
+        "state_abbrev": False,
+    },
+    labels={"years_gained": "Years of potential life gained (2030)"},
+    color_continuous_scale="RdYlGn",
+    range_color=(-max_possible_change, max_possible_change),
+    color_continuous_midpoint=0,
+)
 
-with col1:
-    st.subheader(f"Adjusted YPLL by state • 2030 (base year {base_year})")
+fig.update_layout(
+    margin=dict(l=0, r=0, t=0, b=0),
+    height=650,
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+)
+fig.update_geos(
+    bgcolor="rgba(0,0,0,0)",
+)
 
-    fig = px.choropleth(
-        summary.dropna(subset=["state_abbrev"]),
-        locations="state_abbrev",
-        locationmode="USA-states",
-        color="adjusted_total",
-        scope="usa",
-        hover_name="state",
-        hover_data={
-            "baseline_total": ":,.0f",
-            "adjusted_total": ":,.0f",
-            "savings": ":,.0f",
-            "state_abbrev": False,
-        },
-        labels={"adjusted_total": "Adj. YPLL (2030)"},
-        color_continuous_scale="Viridis",
-        range_color=(baseline_min, baseline_max),
-    )
+st.plotly_chart(fig, use_container_width=True)
 
-    fig.update_layout(
-        margin=dict(l=0, r=0, t=0, b=0),
-        coloraxis_colorbar=dict(title="Adj. YPLL (2030)"),
-    )
+st.subheader("Summary stats")
 
-    st.plotly_chart(fig, use_container_width=True)
+total_baseline = summary["baseline_total"].sum()
+total_adjusted = summary["adjusted_total"].sum()
+total_gained = summary["years_gained"].sum()
+delta_value = total_adjusted - total_baseline
+pct_gained = (total_gained / total_baseline * 100) if total_baseline else 0.0
 
-with col2:
-    st.subheader("Summary stats")
+c1, c2, c3 = st.columns(3)
 
-    total_baseline = summary["baseline_total"].sum()
-    total_adjusted = summary["adjusted_total"].sum()
-    total_savings  = summary["savings"].sum()
-    delta_value = total_adjusted - total_baseline
-    pct_delta      = total_savings / total_baseline * 100
-
+with c1:
     st.metric(
         "Total baseline YPLL (2030)",
         f"{total_baseline:,.0f}",
     )
+
+with c2:
     st.metric(
         "Total adjusted YPLL (2030)",
         f"{total_adjusted:,.0f}",
         delta=f"{delta_value:,.0f}",
     )
-    st.metric(
-        "Relative reduction",
-        f"{pct_delta:.1f} %",
+
+with c3:
+    label = (
+        f"≈ {pct_gained:.1f}% fewer YPLL than baseline"
+        if pct_gained >= 0
+        else f"≈ {abs(pct_gained):.1f}% more YPLL than baseline"
     )
+    st.metric(
+        "Total years of potential life gained",
+        f"{total_gained:,.0f}",
+    )
+    st.caption(label)
