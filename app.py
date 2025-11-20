@@ -327,17 +327,19 @@ elif mode == "Conclusion":
     st.sidebar.markdown("### Conclusion")
     st.sidebar.markdown(
         f"""
-        This view summarizes what the model implies about **potential life gained** under
-        a modest improvement scenario.
-
-        These numbers are **model-based estimates**, not forecasts. They depend on how
-        well the model captures the relationship between state-level risk factors and
-        years of potential life lost, and on the assumptions you choose for changes
-        in deaths by cause.
-
-        Use this as a tool to compare **relative impact across states** and to
-        explore how improvements in different causes of death might translate into
-        more years of life for communities.
+        Our project represents the first analysis of historical YPLL trends at a state level 
+        for multiple causes of death that also makes projections for 2030. 
+        Our state-level choropleth map further pushes our innovative project 
+        forward by providing multiple sliders that users can manipulate to view the effects
+        of increases/decreases in causes of death on projected YPLL rates.
+        
+        Through our model and the accompanying visualization, we learned that reducing both accidents
+        and cancer deaths carries the highest weight in lengthening the lifespan of the average American. 
+        
+        Future improvements to the model would be focused on more granular risk factors, such as the reduction
+        of smoking rates, and modeling those risk factors directly to determine whether meanigful reductions
+        in those risk factors could correlate to improvements in lifespan.
+        
         """
     )
 
@@ -349,9 +351,15 @@ elif mode == "Conclusion":
     )
 
 max_slider_pct = 20
-max_possible_change = float(summary["baseline_total"].max() * (max_slider_pct / 100.0))
+abs_years = summary["years_gained"].abs()
 
-st.title("A Longer Tomorrow: Years of Potential Life Gained")
+color_limit = abs_years.quantile(0.90)
+if color_limit == 0:
+    color_limit = abs_years.max() or 1.0
+
+max_possible_change = float(color_limit)
+
+st.title("A Longer Tomorrow")
 st.caption(
     f"Projected years of potential life gained (or lost) by state in 2030, using {base_year} "
     "as the baseline risk factor year. Green indicates more years gained; red indicates losses."
