@@ -21,11 +21,11 @@ st.markdown(
 )
 
 UCD_MAP = {
-    '#Malignant neoplasms (C00-C97)': 'cancer',
-    '#Diseases of heart (I00-I09,I11,I13,I20-I51)': 'heart_disease',
-    '#Cerebrovascular diseases (I60-I69)': 'stroke',
-    '#Chronic lower respiratory diseases (J40-J47)': 'lower_resp',
-    '#Accidents (unintentional injuries) (V01-X59,Y85-Y86)': 'accidents',
+    "Cancer": "cancer",
+    "Heart Disease": "heart_disease",
+    "Stroke": "stroke",
+    "Chronic Lower Respiratory Disease": "lower_resp",
+    "Accidents": "accidents",
 }
 
 STATE_ABBREV = {
@@ -44,13 +44,14 @@ STATE_ABBREV = {
     "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY",
 }
 
-# Trend-based default changes in deaths by cause over 10 years
+# Did a quick google search regarding projected improvements in deaths for these categories.
+# Serves as a starting point so the users aren't served a blank map
 starting_trend = {
     "cancer":        -15,   # ≈1.6–1.7%/yr decline
     "heart_disease": -10,   # ≈1.0%/yr decline
     "stroke":        -12,   # ≈1.2%/yr decline
     "lower_resp":    -14,   # ≈1.5%/yr decline
-    "accidents":      -5,   # small improvement, very uncertain
+    "accidents":      -5,   # small improvement, but research is less certain about this
 }
 
 FEATURE_COLS = [
@@ -60,7 +61,7 @@ FEATURE_COLS = [
     "seatbelt_always_pct_z", "rural_pct",
 ]
 
-# Kept for future use (Actions mode), but not used in the UI right now
+# not used in the UI right now. This was determined to be a dead end, but keeping it here in case we revisit
 ACTION_FEATURES = [
     "obesity_pct",
     "uninsured_pct",
@@ -75,86 +76,88 @@ with open("model/model.pkl", "rb") as f:
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv("data/df_states.csv")
-    start_year = df["year"].min()
-    df["years_from_start"] = df["year"] - start_year
+    
+    df = pd.read_csv("data/future_df.csv")
+    df = df.drop_duplicates().reset_index(drop=True)
+
     for col in ["state", "sex", "UCD"]:
         df[col] = df[col].astype("category")
+    
     df["cause_short"] = df["UCD"].map(UCD_MAP)
-    df["deaths_num"] = pd.to_numeric(df["deaths"], errors="coerce").fillna(0.0)
+
     return df
 
 
-def aggregate_by_state(df, base_year, improvements, model, target_year=2030):
-    d_base = df[df["year"] == base_year].copy()
-    start_year = df["year"].min()
+def aggregate_by_state(df, improvements, model, target_year=2030):
+    """
+    df: future_df (all years 2021–2030)
+    improvements: dict like {"cancer": -15, "heart_disease": -10, ...}
+    model: LightGBM model loaded from model.pkl
+    target_year: which year in future_df to map (2030)
+    """
 
-    cause_totals = (
-        d_base.dropna(subset=["cause_short"])
-              .groupby(["state", "cause_short"], as_index=False)["deaths_num"]
-              .sum()
-              .rename(columns={"deaths_num": "cause_deaths_obs"})
-    )
+    # 1. Take only the target year rows
+    d = df[df["year"] == target_year].copy()
 
-    state_totals_obs = (
-        cause_totals.groupby("state", as_index=False)["cause_deaths_obs"]
-                    .sum()
-                    .rename(columns={"cause_deaths_obs": "state_deaths_obs"})
-    )
+    # Make sure cause_short exists
+    if "cause_short" not in d.columns:
+        d["cause_short"] = d["UCD"].map(UCD_MAP)
 
-    cause_shares = cause_totals.merge(state_totals_obs, on="state", how="left")
-    cause_shares["cause_share"] = 0.0
-    mask = cause_shares["state_deaths_obs"] > 0
-    cause_shares.loc[mask, "cause_share"] = (
-        cause_shares.loc[mask, "cause_deaths_obs"] / cause_shares.loc[mask, "state_deaths_obs"]
-    )
-
-    d = d_base.copy()
-    d["year"] = target_year
-    d["years_from_start"] = target_year - start_year
-
+    # 2. Predict YPLL for each (state, sex, UCD) row
     X = d[FEATURE_COLS]
     d["ypll_pred"] = model.predict(X)
 
-    baseline_state = (
-        d.groupby("state", as_index=False)["ypll_pred"]
+    # 3. Aggregate by state & cause: baseline YPLL by cause
+    cause_totals = (
+        d.groupby(["state", "cause_short"], as_index=False)["ypll_pred"]
          .sum()
-         .rename(columns={"ypll_pred": "baseline_total"})
+         .rename(columns={"ypll_pred": "cause_ypll_base"})
     )
 
-    merged = cause_shares.merge(baseline_state, on="state", how="left")
-    merged["baseline_model_cause"] = merged["baseline_total"] * merged["cause_share"]
+    # 4. Aggregate to state totals
+    state_totals = (
+        cause_totals.groupby("state", as_index=False)["cause_ypll_base"]
+                    .sum()
+                    .rename(columns={"cause_ypll_base": "baseline_total"})
+    )
 
-    # For death-rate mode: negative = fewer deaths, positive = more deaths
+    # 5. Merge to compute cause shares
+    merged = cause_totals.merge(state_totals, on="state", how="left")
+
+    merged["cause_share"] = 0.0
+    mask = merged["baseline_total"] > 0
+    merged.loc[mask, "cause_share"] = (
+        merged.loc[mask, "cause_ypll_base"] / merged.loc[mask, "baseline_total"]
+    )
+
+    # 6. Apply slider factors: negative = fewer deaths = fewer YPLL (good)
     factors_by_cause = {k: 1 + (v / 100.0) for k, v in improvements.items()}
 
-    factor_series = (
+    merged["factor"] = (
         merged["cause_short"]
         .astype(str)
         .map(factors_by_cause)
         .astype("float64")
         .fillna(1.0)
     )
-    merged["factor"] = factor_series
 
-    merged["adjusted_model_cause"] = merged["baseline_model_cause"] * merged["factor"]
+    merged["adjusted_cause_ypll"] = merged["cause_ypll_base"] * merged["factor"]
 
+    # 7. Summarize back to state level
     summary = (
         merged.groupby("state", as_index=False)
               .agg(
-                  baseline_total=("baseline_model_cause", "sum"),
-                  adjusted_total=("adjusted_model_cause", "sum"),
+                  baseline_total=("cause_ypll_base", "sum"),
+                  adjusted_total=("adjusted_cause_ypll", "sum"),
               )
     )
 
-    # Positive = fewer YPLL (good), negative = more YPLL (bad)
     summary["years_gained"] = summary["baseline_total"] - summary["adjusted_total"]
     summary["state_abbrev"] = summary["state"].map(STATE_ABBREV)
 
     return summary
 
-
-# Kept for later — not used in the current UI
+# Kept for later & not used in the current UI
 def aggregate_by_state_actions(df, base_year, feature_changes, model, target_year=2030):
     d_base = df[df["year"] == base_year].copy()
     start_year = df["year"].min()
@@ -220,7 +223,7 @@ mode = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 
-if mode == "Modeling Years of Life Gained Using Death Rate":
+if mode == "Modeling Years of Life Gained":
     st.sidebar.markdown("### 10-year change in deaths by cause")
     st.sidebar.caption("Negative = fewer deaths (good), positive = more deaths (bad).")
 
@@ -281,7 +284,6 @@ if mode == "Modeling Years of Life Gained Using Death Rate":
 
     summary = aggregate_by_state(
         df,
-        base_year=base_year,
         improvements=improvements,
         model=model,
         target_year=2030,
@@ -314,7 +316,6 @@ elif mode == "Introduction":
 
     summary = aggregate_by_state(
         df,
-        base_year=base_year,
         improvements=improvements,
         model=model,
         target_year=2030,
@@ -342,7 +343,6 @@ elif mode == "Conclusion":
 
     summary = aggregate_by_state(
         df,
-        base_year=base_year,
         improvements=improvements,
         model=model,
         target_year=2030,
