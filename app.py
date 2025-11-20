@@ -208,12 +208,12 @@ min_year = int(df["year"].min())
 max_year = int(df["year"].max())
 base_year = max_year  # stick with 2020 as baseline
 
-st.sidebar.title("Story navigation")
+st.sidebar.title("Navigation")
 mode = st.sidebar.radio(
     "Section",
     (
         "Introduction",
-        "Modeling Years of Life Gained Using Death Rate",
+        "Modeling Years of Life Gained",
         "Conclusion",
     ),
 )
