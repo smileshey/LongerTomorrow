@@ -75,7 +75,7 @@ with open("model/model.pkl", "rb") as f:
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv("df_states.csv")
+    df = pd.read_csv("/data/df_states")
     start_year = df["year"].min()
     df["years_from_start"] = df["year"] - start_year
     for col in ["state", "sex", "UCD"]:
