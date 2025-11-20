@@ -1,5 +1,3 @@
-# LongerTomorrow
-
 # A Longer Tomorrow: Visualizing Future Years of Potential Life Lost
 
 This project explores how changes in major causes of death could translate into years of potential life lost by 2030 across U.S. states.  
