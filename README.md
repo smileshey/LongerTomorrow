@@ -45,6 +45,14 @@ Data Processing (UCD.py)
 - Compute YPLL-related outcomes and convenience features such as years_from_start.
 - Produce a modeling dataset (df_states) and a future-projection dataset (future_df) that are used by the modeling notebook and the Streamlit app.
 
+Raw data files
+- Full raw and intermediate data (original CDC WONDER exports, BRFSS tables, and processed CSVs) are stored in a shared course folder:
+  https://gtvault.sharepoint.com/:f:/s/cse6242dvagroup1/IgCg1dBTRITKQpkpoXQUPKevAbGiPIyYJ86w9uAxCfitTz8?e=hdwaJS
+- These files are NOT required to use the hosted Streamlit UI.
+- They are only needed if you want to:
+  * Re-run UCD.py end-to-end, and/or
+  * Retrain or modify the LightGBM model used in Phillip's_Code_(Model).ipynb.
+
 
 INSTALLATION
 ------------
@@ -79,7 +87,7 @@ If you would like to run the application locally or inspect the code:
 Key Files
 - UCD.py
   Handles data cleaning and feature engineering:
-  - Reads raw CDC WONDER and BRFSS data.
+  - Reads raw CDC WONDER and BRFSS data (from the shared data folder link above).
   - Aggregates to state–year–cause level and computes YPLL-related quantities.
   - Outputs df_states and future_df for modeling and visualization.
 
@@ -130,9 +138,8 @@ Running locally (optional):
 2. Streamlit will print a local URL (typically http://localhost:8501). Open it in a browser.
 
 Interactive behavior (app.py):
-- Load artifacts
-  * Read data/future_df.csv and ensure categorical variables match the model.
-  * Load model/model.pkl (LightGBM regressor).
+- Load data
+  * Read data/future_df.csv and model/model.pkl (LightGBM regressor).
 
 - Baseline projection (2030)
   * Use the model to predict baseline 2030 YPLL rates per 100,000 for each state, sex, and cause.
@@ -142,10 +149,10 @@ Interactive behavior (app.py):
   * Decompose each state’s baseline_total into cause-level contributions using cause_short
     (Cancer, Heart Disease, Stroke, Chronic Lower Respiratory Disease, Accidents).
 
-- Slider-driven scenario
+- Sliders
   * Apply user-selected percentage changes in deaths by cause to scale cause-specific YPLL.
 
-- Scaling the model output
+- Scaling
   * For each state and cause, compute:
     factor = 1 + (slider_value / 100)
   * Multiply baseline cause-level YPLL by factor to obtain adjusted 2030 YPLL.
@@ -162,6 +169,27 @@ Interactive behavior (app.py):
     - Total adjusted YPLL (2030),
     - Total years of potential life gained,
     - Percent change relative to baseline.
+
+
+Repository Structure (simplified)
+---------------------------------
+.
+├── app.py                         # Streamlit UI
+├── UCD.py                         # Data cleaning and feature engineering
+├── data/
+│   └── future_df.csv              # Processed future projection data (2021–2030)
+├── model/
+│   └── model.pkl                  # Trained LightGBM model
+├── Phillip's_Code_(Model).ipynb   # Modeling / training notebook
+├── requirements.txt               # Python dependencies
+└── README.txt                     # Project documentation (this file)
+
+
+DEMO VIDEO (optional)
+---------------------
+If you create a short demo video, add its URL here, for example:
+https://www.youtube.com/watch?v=YOUR_UNLISTED_VIDEO_ID
+
 
 ---
 
