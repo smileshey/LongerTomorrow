@@ -89,39 +89,26 @@ def load_data():
 
 
 def aggregate_by_state(df, improvements, model, target_year=2030):
-    """
-    df: future_df (all years 2021–2030)
-    improvements: dict like {"cancer": -15, "heart_disease": -10, ...}
-    model: LightGBM model loaded from model.pkl
-    target_year: which year in future_df to map (2030)
-    """
-
-    # 1. Take only the target year rows
     d = df[df["year"] == target_year].copy()
 
-    # Make sure cause_short exists
     if "cause_short" not in d.columns:
         d["cause_short"] = d["UCD"].map(UCD_MAP)
 
-    # 2. Predict YPLL for each (state, sex, UCD) row
     X = d[FEATURE_COLS]
     d["ypll_pred"] = model.predict(X)
 
-    # 3. Aggregate by state & cause: baseline YPLL by cause
     cause_totals = (
         d.groupby(["state", "cause_short"], as_index=False)["ypll_pred"]
          .sum()
          .rename(columns={"ypll_pred": "cause_ypll_base"})
     )
 
-    # 4. Aggregate to state totals
     state_totals = (
         cause_totals.groupby("state", as_index=False)["cause_ypll_base"]
                     .sum()
                     .rename(columns={"cause_ypll_base": "baseline_total"})
     )
 
-    # 5. Merge to compute cause shares
     merged = cause_totals.merge(state_totals, on="state", how="left")
 
     merged["cause_share"] = 0.0
@@ -130,7 +117,6 @@ def aggregate_by_state(df, improvements, model, target_year=2030):
         merged.loc[mask, "cause_ypll_base"] / merged.loc[mask, "baseline_total"]
     )
 
-    # 6. Apply slider factors: negative = fewer deaths = fewer YPLL (good)
     factors_by_cause = {k: 1 + (v / 100.0) for k, v in improvements.items()}
 
     merged["factor"] = (
@@ -209,7 +195,7 @@ def aggregate_by_state_actions(df, base_year, feature_changes, model, target_yea
 df = load_data()
 min_year = int(df["year"].min())
 max_year = int(df["year"].max())
-base_year = max_year  # stick with 2020 as baseline
+base_year = max_year
 
 st.sidebar.title("Navigation")
 mode = st.sidebar.radio(
@@ -271,9 +257,9 @@ if mode == "Modeling Years of Life Gained":
         f"""
         **How this map works**
 
-        In this project, we estimate how changes in major causes of death translate into
-        **years of potential life gained by 2030**, using **{base_year}** as a baseline year
-        for each state's risk factors.
+        In this project, we estimate how changes in major causes of death translate into reduction 
+        of YPLL rates by 2030, using 2030 as a baseline year for each state's risk factors." 
+        
 
         In this section, you directly adjust **cause-specific death rates**. Negative slider
         values represent **fewer deaths** (improvement), and positive values represent
@@ -353,7 +339,7 @@ elif mode == "Conclusion":
 max_slider_pct = 20
 abs_years = summary["years_gained"].abs()
 
-color_limit = abs_years.quantile(0.90)
+color_limit = abs_years.quantile(0.80)
 if color_limit == 0:
     color_limit = abs_years.max() or 1.0
 
