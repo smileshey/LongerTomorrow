@@ -6,7 +6,7 @@ DESCRIPTION
 -----------
 "A Longer Tomorrow" is an interactive tool for exploring how changes in major causes of death could affect future Years of Potential Life Lost (YPLL) across U.S. states.
 
-Using historical CDC mortality data (1999–2020) and state-level behavioral / socioeconomic risk factors (e.g., obesity, smoking, insurance coverage), we train a LightGBM model to predict YPLL rates per 100,000 for 2030 by state, sex, and cause of death. The Streamlit app then loads a future-state dataset, applies the trained model, and decomposes projected YPLL across five leading causes of death:
+Using historical CDC mortality data (1999–2020) from the CDC WONDER Underlying Cause of Death (UCD) system and state-level behavioral / socioeconomic risk factors (e.g., obesity, smoking, insurance coverage), we train a LightGBM model to predict YPLL rates per 100,000 for 2030 by state, sex, and cause of death. The Streamlit app then loads a future-state dataset, applies the trained model, and decomposes projected YPLL across five leading causes of death:
 
 - Cancer
 - Heart Disease
@@ -17,14 +17,18 @@ Using historical CDC mortality data (1999–2020) and state-level behavioral / s
 In the UI, users adjust sliders that represent 10-year percentage changes in deaths for each cause (e.g., “-15%” cancer deaths). These changes are translated into scaled YPLL projections for 2030, and the app visualizes, for each state, how many years of potential life are gained or lost relative to the baseline model using a U.S. choropleth and summary metrics.
 
 Data Sources
-1. CDC WONDER – Multiple Cause of Death (MCD)
-   Original mortality data are obtained from the CDC WONDER Multiple Cause of Death system for 1999–2020:
-   - CDC WONDER MCD: https://wonder.cdc.gov/mcd.html
+1. CDC WONDER – Underlying Cause of Death (UCD)
+   Original mortality data are obtained from the CDC WONDER Underlying Cause of Death system for 1999–2020.
+   - Saved CDC WONDER UCD query:
+     https://wonder.cdc.gov/controller/saved/D76/D456F892
+
    Key settings:
-   - Dataset: Multiple Cause of Death, 1999–2020
+   - Dataset: Underlying Cause of Death, 1999–2020
    - Underlying Cause of Death: UCD–ICD–10 113 Cause List
-   - Geography: States; Strata: Sex, State, Race
-   - Ages: 18+
+   - Geography: States
+   - Strata: Sex, State (no race stratification)
+   - Age grouping: 10-year age groups (e.g., 15–24, 25–34, …, 75–84)
+   - Age restriction: adult age groups up to 75–84, with YPLL calculated using a 75-year upper age limit
    - Underlying causes restricted to the top 5 UCDs:
      * #Diseases of heart (I00-I09,I11,I13,I20-I51)
      * #Malignant neoplasms (C00-C97)
@@ -40,19 +44,24 @@ Data Sources
      educa_z, smoking_pct_z, binge_drink_pct_z, seatbelt_always_pct_z
 
 Data Processing (UCD.py)
-- Import raw CDC WONDER extracts and aggregate to state–year–cause level.
+- Import raw CDC WONDER UCD extracts and aggregate to state–year–cause level.
 - Join BRFSS-derived features by state and year.
 - Compute YPLL-related outcomes and convenience features such as years_from_start.
 - Produce a modeling dataset (df_states) and a future-projection dataset (future_df) that are used by the modeling notebook and the Streamlit app.
 
-Raw data files
-- Full raw and intermediate data (original CDC WONDER exports, BRFSS tables, and processed CSVs) are stored in a shared course folder:
-  https://gtvault.sharepoint.com/:f:/s/cse6242dvagroup1/IgCg1dBTRITKQpkpoXQUPKevAbGiPIyYJ86w9uAxCfitTz8?e=hdwaJS
-- These files are NOT required to use the hosted Streamlit UI.
-- They are only needed if you want to:
-  * Re-run UCD.py end-to-end, and/or
-  * Retrain or modify the LightGBM model used in Phillip's_Code_(Model).ipynb.
+Data Access
+-----------
+The raw and intermediate data files used to build df_states and future_df are stored in a shared data folder:
 
+https://gtvault.sharepoint.com/:f:/s/cse6242dvagroup1/IgCg1dBTRITKQpkpoXQUPKevAbGiPIyYJ86w9uAxCfitTz8?e=hdwaJS
+
+These data are **not required** to run the hosted UI. However, if you wish to:
+- Re-run UCD.py, or
+- Re-train / modify the model in Phillip's_Code_(Model).ipynb,
+
+you will need to download the data from that location.
+
+---
 
 INSTALLATION
 ------------
@@ -68,41 +77,45 @@ If you would like to run the application locally or inspect the code:
      https://github.com/smileshey/LongerTomorrow/tree/main
 
    From a terminal:
-   git clone https://github.com/smileshey/LongerTomorrow.git
-   cd LongerTomorrow
+   - git clone https://github.com/smileshey/LongerTomorrow.git
+   - cd LongerTomorrow
 
 2. Ensure you have Python 3.9+ installed.
 
 3. (Recommended) Create and activate a virtual environment:
+   - python -m venv .venv
+   - On macOS / Linux: source .venv/bin/activate
+   - On Windows (PowerShell): .venv\Scripts\activate
 
 4. Install dependencies:
-   pip install -r requirements.txt
+   - pip install -r requirements.txt
 
 Key Files
-- UCD.py
+- UCD.py  
   Handles data cleaning and feature engineering:
-  - Reads raw CDC WONDER and BRFSS data (from the shared data folder link above).
+  - Reads raw CDC WONDER UCD and BRFSS data.
   - Aggregates to state–year–cause level and computes YPLL-related quantities.
   - Outputs df_states and future_df for modeling and visualization.
 
-- Phillip's_Code_(Model).ipynb
+- Phillip's_Code_(Model).ipynb  
   Trains the LightGBM model on df_states:
   - Defines features (year, state, UCD, risk factors, etc.).
   - Encodes categorical variables and trains a LightGBM regressor.
   - Evaluates performance and serializes the model to model/model.pkl.
 
-- model/model.pkl
+- model/model.pkl  
   The trained LightGBM model loaded by the Streamlit app.
 
-- data/future_df.csv
+- data/future_df.csv  
   The future projection dataset (2021–2030) used as input to model/model.pkl
   to generate 2030 YPLL predictions for each (state, sex, cause) combination.
 
-- app.py
+- app.py  
   The Streamlit application that loads future_df and model.pkl,
   computes projected YPLL for 2030, applies user-selected scenarios,
   and renders the interactive visualization.
 
+---
 
 EXECUTION
 ---------
@@ -127,7 +140,7 @@ Using the hosted app (recommended):
 
 Running locally (optional):
 1. From the project root (the directory containing app.py), run:
-   streamlit run app.py
+   - streamlit run app.py
 
 2. Streamlit will print a local URL (typically http://localhost:8501). Open it in a browser.
 
@@ -164,6 +177,7 @@ Interactive behavior (app.py):
     - Total years of potential life gained,
     - Percent change relative to baseline.
 
+---
 
 DEMO VIDEO
 ---------------------
