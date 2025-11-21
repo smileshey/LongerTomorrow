@@ -74,12 +74,6 @@ If you would like to run the application locally or inspect the code:
 2. Ensure you have Python 3.9+ installed.
 
 3. (Recommended) Create and activate a virtual environment:
-   - macOS / Linux:
-     python -m venv venv
-     source venv/bin/activate
-   - Windows:
-     python -m venv venv
-     venv\Scripts\activate
 
 4. Install dependencies:
    pip install -r requirements.txt
@@ -171,26 +165,11 @@ Interactive behavior (app.py):
     - Percent change relative to baseline.
 
 
-Repository Structure (simplified)
----------------------------------
-.
-├── app.py                         # Streamlit UI
-├── UCD.py                         # Data cleaning and feature engineering
-├── data/
-│   └── future_df.csv              # Processed future projection data (2021–2030)
-├── model/
-│   └── model.pkl                  # Trained LightGBM model
-├── Phillip's_Code_(Model).ipynb   # Modeling / training notebook
-├── requirements.txt               # Python dependencies
-└── README.txt                     # Project documentation (this file)
-
-
-DEMO VIDEO (optional)
+DEMO VIDEO
 ---------------------
-If you create a short demo video, add its URL here, for example:
-https://www.youtube.com/watch?v=YOUR_UNLISTED_VIDEO_ID
+In place of a demo video, our team has assembled an interactive UI that abstracts away most of the setup and allows you to explore the model directly:
 
-
+https://longertomorrow-app.streamlit.app/
 ---
 
 ## Repository Structure (simplified)
