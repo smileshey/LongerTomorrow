@@ -1,149 +1,167 @@
 # A Longer Tomorrow: Visualizing Future Years of Potential Life Lost
 
-This project explores how changes in major causes of death could translate into years of potential life lost by 2030 across U.S. states.  
-It combines CDC mortality data, behavioral risk factor data, a LightGBM model, and an interactive Streamlit UI to let users simulate the projected impacts of changes to those risk factors over the next 10 years.
-
 ---
 
-## Overview
+DESCRIPTION
+-----------
+"A Longer Tomorrow" is an interactive tool for exploring how changes in major causes of death could affect future Years of Potential Life Lost (YPLL) across U.S. states.
 
-We start from historical mortality patterns and risk factors at the **state** level (1999–2020), estimate **Years of Potential Life Lost (YPLL)**, and then train a model to project YPLL for 2030.  
+Using historical CDC mortality data (1999–2020) and state-level behavioral / socioeconomic risk factors (e.g., obesity, smoking, insurance coverage), we train a LightGBM model to predict YPLL rates per 100,000 for 2030 by state, sex, and cause of death. The Streamlit app then loads a future-state dataset, applies the trained model, and decomposes projected YPLL across five leading causes of death:
 
-In the Streamlit app:
+- Cancer
+- Heart Disease
+- Stroke
+- Chronic Lower Respiratory Disease
+- Accidents
 
-- A LightGBM model predicts a baseline YPLL in 2030 for each state.
-- The model’s predictions are decomposed across five leading causes of death.
-- User-adjustable sliders change the assumed 10-year reduction or increase in deaths for each cause.
-- The app recomputes a **scaled YPLL projection** and visualizes the result on a U.S. choropleth, as **years of potential life gained or lost** relative to baseline.
+In the UI, users adjust sliders that represent 10-year percentage changes in deaths for each cause (e.g., “-15%” cancer deaths). These changes are translated into scaled YPLL projections for 2030, and the app visualizes, for each state, how many years of potential life are gained or lost relative to the baseline model using a U.S. choropleth and summary metrics.
 
----
+Data Sources
+1. CDC WONDER – Multiple Cause of Death (MCD)
+   Original mortality data are obtained from the CDC WONDER Multiple Cause of Death system for 1999–2020:
+   - CDC WONDER MCD: https://wonder.cdc.gov/mcd.html
+   Key settings:
+   - Dataset: Multiple Cause of Death, 1999–2020
+   - Underlying Cause of Death: UCD–ICD–10 113 Cause List
+   - Geography: States; Strata: Sex, State, Race
+   - Ages: 18+
+   - Underlying causes restricted to the top 5 UCDs:
+     * #Diseases of heart (I00-I09,I11,I13,I20-I51)
+     * #Malignant neoplasms (C00-C97)
+     * #Cerebrovascular diseases (I60-I69)
+     * #Chronic lower respiratory diseases (J40-J47)
+     * #Accidents (unintentional injuries) (V01-X59,Y85-Y86)
 
-## Data Sources
+2. CDC BRFSS – Behavioral Risk Factor Surveillance System
+   To enrich mortality data with health and behavioral risk factors, we use:
+   - BRFSS data: https://www.cdc.gov/brfss/annual_data/annual_data.htm
+   Example state-year features:
+   - obesity_pct, uninsured_pct, income_mean, employed_pct, diabetes_pct,
+     educa_z, smoking_pct_z, binge_drink_pct_z, seatbelt_always_pct_z
 
-### 1. CDC WONDER – Multiple Cause of Death (MCD)
+Data Processing (UCD.py)
+- Import raw CDC WONDER extracts and aggregate to state–year–cause level.
+- Join BRFSS-derived features by state and year.
+- Compute YPLL-related outcomes and convenience features such as years_from_start.
+- Produce a modeling dataset (df_states) and a future-projection dataset (future_df) that are used by the modeling notebook and the Streamlit app.
 
-Original mortality data were obtained from the **CDC WONDER Multiple Cause of Death** system for the period **1999–2020**:
 
-- CDC WONDER MCD: <https://wonder.cdc.gov/mcd.html>  
+INSTALLATION
+------------
+Quick start – hosted application
+- If you only want to explore the interactive UI (no local setup required), visit:
+  https://longertomorrow-app.streamlit.app/
 
-Query settings:
+Local setup (optional)
+If you would like to run the application locally or inspect the code:
 
-- **Dataset:** Multiple Cause of Death, 1999–2020
-- **Underlying Cause of Death:** UCD–ICD–10 113 Cause List
-- **Age grouping:** Five-year age groups
-- **Geography:** States
-- **Strata:** Sex, State, Race
-- **Age restriction:** Adults aged **18 years and older**
-- **Underlying causes of death restricted to the top 5 UCDs:**
-  - `#Diseases of heart (I00-I09,I11,I13,I20-I51)`
-  - `#Malignant neoplasms (C00-C97)`
-  - `#Cerebrovascular diseases (I60-I69)`
-  - `#Chronic lower respiratory diseases (J40-J47)`
-  - `#Accidents (unintentional injuries) (V01-X59,Y85-Y86)`
+1. Clone the repository:
+   - GitHub repo:
+     https://github.com/smileshey/LongerTomorrow/tree/main
 
-These extracts were cleaned and aggregated into a state-level panel called **`df_states`**.
+   From a terminal:
+   git clone https://github.com/smileshey/LongerTomorrow.git
+   cd LongerTomorrow
 
-### 2. CDC BRFSS – Behavioral Risk Factor Surveillance System
+2. Ensure you have Python 3.9+ installed.
 
-To enrich the mortality data with health and behavioral risk factors, we used the **CDC BRFSS** (Behavioral Risk Factor Surveillance System):
+3. (Recommended) Create and activate a virtual environment:
+   - macOS / Linux:
+     python -m venv venv
+     source venv/bin/activate
+   - Windows:
+     python -m venv venv
+     venv\Scripts\activate
 
-- BRFSS data: <https://www.cdc.gov/brfss/annual_data/annual_data.htm>
+4. Install dependencies:
+   pip install -r requirements.txt
 
-Relevant features (by state and year) include, for example:
+Key Files
+- UCD.py
+  Handles data cleaning and feature engineering:
+  - Reads raw CDC WONDER and BRFSS data.
+  - Aggregates to state–year–cause level and computes YPLL-related quantities.
+  - Outputs df_states and future_df for modeling and visualization.
 
-- `obesity_pct`
-- `uninsured_pct`
-- `income_mean`
-- `employed_pct`
-- `diabetes_pct`
-- `educa_z`
-- `smoking_pct_z`
-- `binge_drink_pct_z`
-- `seatbelt_always_pct_z`
+- Phillip's_Code_(Model).ipynb
+  Trains the LightGBM model on df_states:
+  - Defines features (year, state, UCD, risk factors, etc.).
+  - Encodes categorical variables and trains a LightGBM regressor.
+  - Evaluates performance and serializes the model to model/model.pkl.
 
-These data were manually downloaded from BRFSS, parsed in Python, and merged into the base mortality dataset in `UCD.py`.
+- model/model.pkl
+  The trained LightGBM model loaded by the Streamlit app.
 
----
+- data/future_df.csv
+  The future projection dataset (2021–2030) used as input to model/model.pkl
+  to generate 2030 YPLL predictions for each (state, sex, cause) combination.
 
-## Data Processing (`UCD.py`)
+- app.py
+  The Streamlit application that loads future_df and model.pkl,
+  computes projected YPLL for 2030, applies user-selected scenarios,
+  and renders the interactive visualization.
 
-The script **`UCD.py`** handles:
 
-1. Importing the raw CDC WONDER MCD extracts.
-2. Aggregating to state–year–cause level and computing YPLL-related quantities.
-3. Joining in BRFSS-derived features by state and year.
-4. Producing the final modeling dataset `df_states`, which includes:
-   - Mortality counts and population,
-   - YPLL-related outcome(s),
-   - Cause of death (`UCD`),
-   - Demographics / geography,
-   - Behavioral and socioeconomic covariates,
-   - Convenience columns such as `years_from_start`.
+EXECUTION
+---------
+Using the hosted app (recommended):
+- Open the deployed Streamlit app in your browser:
+  https://longertomorrow-app.streamlit.app/
 
-The resulting dataframe is saved and later loaded by the modeling notebook.
+- The app has three main sections accessible from the left sidebar:
+  1) Introduction
+     - Provides background on YPLL, data sources, and the modeling approach.
+  2) Modeling Years of Life Gained
+     - Shows the interactive choropleth and sliders for:
+       * Cancer deaths change (%)
+       * Heart disease deaths change (%)
+       * Stroke deaths change (%)
+       * Lower respiratory deaths change (%)
+       * Accident deaths change (%)
+     - Sliders represent 10-year percentage changes in deaths for each cause
+       (negative = fewer deaths → lower YPLL; positive = more deaths → higher YPLL).
+  3) Conclusion
+     - Summarizes key insights from the model and visualization.
 
----
+Running locally (optional):
+1. From the project root (the directory containing app.py), run:
+   streamlit run app.py
 
-## Modeling (`Phillip's_Code_(Model).ipynb`)
+2. Streamlit will print a local URL (typically http://localhost:8501). Open it in a browser.
 
-The notebook **`Phillip's_Code_(Model).ipynb`** trains a LightGBM model on `df_states` to predict a projected YPLL-like quantity for 2030 (e.g. `ypll_30`):
+Interactive behavior (app.py):
+- Load artifacts
+  * Read data/future_df.csv and ensure categorical variables match the model.
+  * Load model/model.pkl (LightGBM regressor).
 
-- Defines the feature set (including `year`, `state`, `UCD`, and risk factors).
-- Encodes categorical variables and ensures consistency with LightGBM’s expectations.
-- Fits a LightGBM regressor using historical data.
-- Evaluates performance and tunes hyperparameters.
-- Serializes the trained model to disk as **`model/model.pkl`**.
+- Baseline projection (2030)
+  * Use the model to predict baseline 2030 YPLL rates per 100,000 for each state, sex, and cause.
+  * Aggregate to get baseline_total YPLL per state.
 
-This serialized model is what the Streamlit app uses at runtime.
+- Cause-of-death decomposition
+  * Decompose each state’s baseline_total into cause-level contributions using cause_short
+    (Cancer, Heart Disease, Stroke, Chronic Lower Respiratory Disease, Accidents).
 
----
+- Slider-driven scenario
+  * Apply user-selected percentage changes in deaths by cause to scale cause-specific YPLL.
 
-## Interactive App (`app.py`)
+- Scaling the model output
+  * For each state and cause, compute:
+    factor = 1 + (slider_value / 100)
+  * Multiply baseline cause-level YPLL by factor to obtain adjusted 2030 YPLL.
+  * Aggregate adjusted YPLL back to the state level.
 
-The file `app.py` serves the user interface via **Streamlit**.
-
-Overall Project Flow:
-
-1. **Load artifacts**
-   - Load `df_states` from `df_states.csv`.
-   - Add derived features such as `years_from_start`, `cause_short`, and numeric `deaths_num`.
-   - Load the trained LightGBM model from `model/model.pkl`.
-
-2. **Baseline projection**
-   - Fix a **baseline risk-factor year** (e.g. 2020) and project YPLL forward to 2030.
-   - Use the model to compute **baseline 2030 YPLL** (`baseline_total`) by state.
-
-3. **Cause-of-death decomposition**
-   - Use observed state-level death counts by cause to compute **cause shares** within each state.
-   - Allocate the baseline 2030 YPLL to each of the five causes using those shares.
-
-4. **Slider-driven scenario**
-   - The UI exposes sliders for each major cause:
-     - Cancer deaths change (%)
-     - Heart disease deaths change (%)
-     - Stroke deaths change (%)
-     - Lower respiratory deaths change (%)
-     - Accident deaths change (%)
-   - Slider values are interpreted as **10-year percentage changes in deaths for that cause**  
-     (negative = fewer deaths, positive = more deaths).
-
-5. **Scaling the model output**
-   - For each state and cause, apply a multiplicative **scaler** derived from the slider:
-     - `factor = 1 + (slider_value / 100)`
-   - Multiply baseline cause-level YPLL by these factors to get **adjusted 2030 YPLL**.
-   - Aggregate adjusted YPLL back to the state level.
-
-6. **Map and metrics**
-   - Compute **years of potential life gained** as:
-     - `years_gained = baseline_total - adjusted_total`
-   - Render a U.S. choropleth using Plotly, colored by `years_gained`:
-     - Green = more years of life gained (Years of Potential Life Gained),
-     - Red = years lost (Years of Potential Life Lost).
-   - Display summary metrics:
-     - Total baseline YPLL (2030),
-     - Total adjusted YPLL (2030),
-     - Total years of potential life gained,
-     - Approximate percentage change vs. baseline.
+- Map and metrics
+  * Compute:
+    years_gained = baseline_total - adjusted_total
+  * Render a U.S. choropleth where:
+    - Green = more years of life gained (lower YPLL vs baseline),
+    - Red = years of life lost (higher YPLL vs baseline).
+  * Show summary metrics:
+    - Total baseline YPLL (2030),
+    - Total adjusted YPLL (2030),
+    - Total years of potential life gained,
+    - Percent change relative to baseline.
 
 ---
 
